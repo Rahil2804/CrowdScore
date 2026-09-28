@@ -1,0 +1,21 @@
+@import "tailwindcss";
+
+@theme inline {
+  --font-sans: Arial, Helvetica, sans-serif;
+}
+
+:root {
+  color-scheme: dark;
+  background: #0c0a09;
+  color: #f5f5f4;
+  font-family: Arial, Helvetica, sans-serif;
+}
+
+body {
+  margin: 0;
+}
+
+::selection {
+  background: #bef264;
+  color: #0c0a09;
+}
