@@ -1,138 +1,195 @@
 # CrowdScore
 
-A real-time MMA scoring and analytics platform in development. **Milestone 1**
-provides a Next.js frontend connected to an ASP.NET Core health endpoint.
-Scoring, accounts, persistence, real-time updates, and analytics arrive in later
-milestones; see [PROJECT_PLAN.md](PROJECT_PLAN.md) for the roadmap.
+A real-time MMA scoring and analytics platform in development. Milestone 2 adds
+PostgreSQL persistence, Entity Framework Core, seeded development data, and
+read-only event and fight APIs. Scoring, accounts, real-time updates, and
+analytics remain later milestones; see [PROJECT_PLAN.md](PROJECT_PLAN.md).
 
 ## Prerequisites
 
-- Node.js 24 or newer, with npm (validated with Node 24 and npm 11).
+- Docker Desktop with Docker Compose.
 - .NET 10 SDK.
-- Two terminals and a modern browser.
+- Node.js 24 or newer with npm for the existing frontend.
+- A modern browser.
+
+The commands below run from the repository root. PowerShell users can run the
+same Docker and .NET commands; use `npm.cmd` instead of `npm` for frontend
+commands when PowerShell blocks `npm.ps1`.
 
 ## Run locally
 
-Run these commands from the repository root. The examples use PowerShell;
-on macOS/Linux, use `npm` instead of `npm.cmd` and `cp` instead of `Copy-Item`.
+### 1. Start PostgreSQL
 
-**Terminal 1 — backend**
+```sh
+docker compose up -d postgres
+docker compose ps
+```
 
-```powershell
+Wait until the `postgres` service reports `healthy`. PostgreSQL listens on
+`localhost:5432` and stores data in the `crowdscore-postgres-data` Docker
+volume.
+
+### 2. Restore the EF Core tool and apply migrations
+
+```sh
+dotnet tool restore
+dotnet ef database update --project backend/CrowdScore.Api/CrowdScore.Api.csproj --startup-project backend/CrowdScore.Api/CrowdScore.Api.csproj
+```
+
+The migration command creates the `Events`, `Fighters`, and `Fights` tables.
+Migrations are explicit: starting the API does not create or update the schema.
+
+To list the applied and available migrations:
+
+```sh
+dotnet ef migrations list --project backend/CrowdScore.Api/CrowdScore.Api.csproj --startup-project backend/CrowdScore.Api/CrowdScore.Api.csproj
+```
+
+### 3. Run the backend
+
+```sh
 dotnet run --project backend/CrowdScore.Api --launch-profile http
 ```
 
-The API listens on `http://localhost:5000`. Open
-`http://localhost:5000/api/health` to see:
+The API listens on `http://localhost:5000`. In Development, startup inserts one
+fictional event, six fighters, and three fights if that event is not already
+present. Restarting the API does not duplicate the seed data.
+
+### 4. Verify the API
+
+In another terminal:
+
+```sh
+curl -i http://localhost:5000/api/health
+curl -i http://localhost:5000/api/events
+curl -i http://localhost:5000/api/events/1
+curl -i http://localhost:5000/api/fights/1
+```
+
+The health response remains:
 
 ```json
 {"status":"healthy"}
 ```
 
-**Terminal 2 — frontend**
+On a fresh database, the seeded event and first fight use IDs `1`. To inspect
+the seed counts directly in PostgreSQL:
 
-```powershell
-cd frontend
-Copy-Item .env.example .env.local
-npm.cmd ci
-npm.cmd run dev
+```sh
+docker compose exec postgres psql -U crowdscore -d crowdscore -c 'SELECT (SELECT COUNT(*) FROM "Events") AS events, (SELECT COUNT(*) FROM "Fighters") AS fighters, (SELECT COUNT(*) FROM "Fights") AS fights;'
 ```
 
-Copy the environment example only on initial setup; preserve an existing
-`.env.local`. On subsequent runs, start each application using its run command.
-Run `npm.cmd ci` again when the lockfile changes.
+### 5. Run the existing frontend
 
-Open `http://localhost:3000`. The service card shows `healthy` only after the
-browser receives and validates the API response. Requests time out after five
-seconds. If the API is unavailable, the card shows an error and a Retry button.
-Checks run on page load and retry, without background polling.
+In another terminal:
 
-Stop each application with **Ctrl+C** in its terminal.
+```sh
+cd frontend
+cp .env.example .env.local
+npm ci
+npm run dev
+```
+
+Preserve an existing `.env.local`; copy the example only for initial setup.
+Open `http://localhost:3000` to see the existing backend health check.
+
+## PostgreSQL lifecycle
+
+Stop and restart PostgreSQL while preserving its data:
+
+```sh
+docker compose stop postgres
+docker compose start postgres
+```
+
+Stop and remove the container while preserving its named volume:
+
+```sh
+docker compose down
+```
+
+Deleting the named volume erases the local database and is intentionally not
+part of the normal workflow.
 
 ## Configuration
 
 | Setting | Development value | Purpose |
 | --- | --- | --- |
-| `NEXT_PUBLIC_API_BASE_URL` | `http://localhost:5000` | API origin, set in `frontend/.env.local` |
-| `Cors:AllowedOrigins` | `["http://localhost:3000"]` | Browser origins allowed by the API, set in development app settings |
+| `ConnectionStrings:CrowdScore` | Local Compose connection | PostgreSQL connection used by EF Core |
+| `ConnectionStrings__CrowdScore` | Not set by default | Environment-variable override for the connection |
+| `NEXT_PUBLIC_API_BASE_URL` | `http://localhost:5000` | Public API origin used by the frontend |
+| `Cors:AllowedOrigins` | `http://localhost:3000` | Browser origin allowed by the API in Development |
 | Backend `http` launch profile | `http://localhost:5000` | Local API address and Development environment |
 
-`NEXT_PUBLIC_` variables are public and embedded in the browser bundle at build
-time. Never put secrets in them. Restart the frontend after changing `.env.local`;
-rebuild when running the production frontend.
+The committed database username and password are for the isolated local Docker
+service only. Override the connection string for any other environment. For
+example, on macOS/Linux:
 
-The backend uses standard ASP.NET Core configuration, not dotenv files. An
-environment variable such as `Cors__AllowedOrigins__0` overrides the first
-configured origin. Base app settings allow no cross-origin browser access;
-the localhost origin is enabled by the Development environment. CORS permits
-GET requests without credentials and uses exact origins with no trailing slash.
+```sh
+export ConnectionStrings__CrowdScore='Host=localhost;Port=5432;Database=crowdscore;Username=crowdscore;Password=replace-me'
+```
 
-HTTP is used for local development. Deployment and production TLS configuration
-are deferred to a later milestone.
+In PowerShell:
 
-### Different ports and troubleshooting
+```powershell
+$env:ConnectionStrings__CrowdScore = 'Host=localhost;Port=5432;Database=crowdscore;Username=crowdscore;Password=replace-me'
+```
 
-- **API connection fails:** confirm the API is running and open `/api/health`
-  directly. Verify `NEXT_PUBLIC_API_BASE_URL` and restart Next.js after changes.
-- **CORS error:** use `http://localhost:3000`, not `http://127.0.0.1:3000`.
-  Confirm the API uses the `http` launch profile and the Development environment.
-- **Port already in use:** stop the conflicting process or deliberately change
-  ports. For the API, update the launch profile and frontend environment value.
-  For the frontend, update its `dev`/`start` script ports and the backend's allowed
-  origin. Restart both applications after changing configuration.
-- **Unexpected response:** confirm the configured address points to CrowdScore's
-  API. The expected response is HTTP 200 with the JSON shown above.
-- **PowerShell blocks npm.ps1:** use the documented `npm.cmd` commands.
+The backend uses standard ASP.NET Core configuration and does not load dotenv
+files. Environment variables override JSON configuration. Frontend variables
+prefixed with `NEXT_PUBLIC_` are public and embedded in the browser bundle.
+
+## API endpoints
+
+| Method | Route | Response |
+| --- | --- | --- |
+| `GET` | `/api/health` | Existing service health response |
+| `GET` | `/api/events` | Event summaries ordered by date |
+| `GET` | `/api/events/{eventId}` | One event with its ordered fight card |
+| `GET` | `/api/fights/{fightId}` | One fight with both fighter DTOs |
+
+Unknown integer IDs return `404 Not Found`. Database entities are projected to
+API response DTOs and all database reads are asynchronous and no-tracking.
 
 ## Validation
 
-From the repository root:
-
-```powershell
-npm.cmd --prefix frontend run lint
-npm.cmd --prefix frontend run build
+```sh
+dotnet restore backend/CrowdScore.Api/CrowdScore.Api.csproj
 dotnet build backend/CrowdScore.Api/CrowdScore.Api.csproj
+npm --prefix frontend run lint
+npm --prefix frontend run build
 ```
 
-The frontend build does not require a running API. To check the production
-frontend locally, stop the frontend development server, then run:
+No automated backend test project is currently configured.
 
-```powershell
-npm.cmd --prefix frontend run start
-```
+## Troubleshooting
 
-Keep the API running and open `http://localhost:3000` to verify the connection.
-To check recovery, stop the API and reload the page; restart the API and click
-Retry. To inspect CORS, request the endpoint with an `Origin` header:
-
-```powershell
-curl.exe -i -H "Origin: http://localhost:3000" http://localhost:5000/api/health
-curl.exe -i -H "Origin: http://localhost:3001" http://localhost:5000/api/health
-```
-
-Only the first response should include `Access-Control-Allow-Origin`. CORS
-controls browser access; it does not prevent requests from non-browser clients.
-No automated test suites are configured in this milestone.
+- **PostgreSQL is not healthy:** run `docker compose logs postgres` and check
+  whether another process is using port `5432`.
+- **API reports a missing table:** run the EF Core database update command
+  before starting the backend.
+- **Database authentication fails:** verify that the connection string matches
+  the Compose credentials. Existing volumes retain the credentials used when
+  they were first created.
+- **CORS error:** use `http://localhost:3000`, not `http://127.0.0.1:3000`, and
+  run the backend with the `http` launch profile.
+- **Frontend API connection fails:** confirm `/api/health` works directly and
+  verify `frontend/.env.local` contains
+  `NEXT_PUBLIC_API_BASE_URL=http://localhost:5000`.
 
 ## Repository structure
 
 ```text
-frontend/
-  app/                  Page, layout, and Tailwind styles
-  components/           Client health status UI
-  services/             API request and response validation
-  types/                Health response contract
-backend/
-  CrowdScore.Api/
-    Controllers/        HTTP endpoints
-    DTOs/               API response contracts
-    Properties/         Local launch configuration
-    Program.cs          Application startup and CORS
-PROJECT_PLAN.md          Architecture and roadmap
+frontend/                       Next.js application
+backend/CrowdScore.Api/
+  Controllers/                 Health, event, and fight HTTP endpoints
+  Data/                        EF Core context, migrations, and dev seeder
+  DTOs/                        API response contracts
+  Models/                      Fighter, event, fight, and fight status
+docker-compose.yml             Local PostgreSQL service
+.config/dotnet-tools.json      Repository-local EF Core CLI tool
+PROJECT_PLAN.md                Architecture and roadmap
 ```
-
-The backend uses the CrowdScore name; the roadmap still contains earlier
-FightPulse naming. Only directories needed for implemented code are created.
 
 ## License
 
